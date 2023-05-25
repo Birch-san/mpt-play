@@ -1,19 +1,48 @@
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, TypedDict, NamedTuple, List
 from transformers import (
   AutoConfig,
   AutoModelForCausalLM,
+  AutoTokenizer,
   BitsAndBytesConfig,
   GenerationConfig,
   HfArgumentParser,
   set_seed,
+  StoppingCriteria,
+  StoppingCriteriaList,
+  TextIteratorStreamer,
 )
-from argparse import Namespace
 import torch
+from torch import LongTensor, no_grad
 from src.device_map import device_map
 import logging
+import signal
+from time import sleep
+from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+class TokenizerOutput(TypedDict):
+  input_ids: LongTensor
+  attention_mask: LongTensor
+
+class Participant(Enum):
+  User = 'user'
+  Assistant = 'assistant'
+  System = 'system'
+
+class Message(NamedTuple):
+  participant: Participant
+  message: str
+
+@dataclass
+class StopOnTokens(StoppingCriteria):
+  stop_token_ids: List[int]
+  def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
+    for stop_id in self.stop_token_ids:
+      if input_ids[0][-1] == stop_id:
+        return True
+    return False
 
 @dataclass
 class ModelArguments:
@@ -42,14 +71,20 @@ class ModelArguments:
   )
 
 @dataclass
-class GenerationArguments:
-  # For more hyperparameters check:
-  # https://huggingface.co/docs/transformers/main_classes/text_generation#transformers.GenerationConfig
+class MiscArguments:
   seed: Optional[int] = field(
     default=64,
     metadata={"help": "Random seed, for deterministic generation."}
   )
+  compile: bool = field(
+    default=False,
+    metadata={"help": "Invoke torch.compile() on the model, with mode='max-autotune'. Requires PyTorch 2, CUDA, and either Python 3.10 or Python 3.11 with a recent torch nightly. Will make the first inference from the model take a bit longer, but subsequent inferences will be faster."}
+  )
 
+@dataclass
+class GenerationArguments:
+  # For more hyperparameters check:
+  # https://huggingface.co/docs/transformers/main_classes/text_generation#transformers.GenerationConfig
   # Length arguments
   max_new_tokens: Optional[int] = field(
     default=256,
@@ -119,15 +154,65 @@ def get_model(args: ModelArguments) -> AutoModelForCausalLM:
   return model
 
 def main():
-  hfparser = HfArgumentParser((ModelArguments, GenerationArguments))
-  model_args, generation_args, extra_args = hfparser.parse_args_into_dataclasses(return_remaining_strings=True)
+  hfparser = HfArgumentParser((ModelArguments, GenerationArguments, MiscArguments))
+  model_args, generation_args, misc_args, extra_args = hfparser.parse_args_into_dataclasses(return_remaining_strings=True)
   if extra_args:
     raise f"Received unsupported command-line args: {extra_args}"
   generation_config = GenerationConfig(**vars(generation_args))
-  args = Namespace(**vars(model_args))
   model: AutoModelForCausalLM = get_model(model_args)
-  set_seed(generation_args.seed)
-  ## TODO: inference the model
+  set_seed(misc_args.seed)
+  if misc_args.compile:
+    torch.compile(model, mode='max-autotune')
+  
+  interruptLoop = False
+  def interrupt_handler(sig, frame):
+    nonlocal interruptLoop
+    interruptLoop = True
+  signal.signal(signal.SIGINT, interrupt_handler) # handle ctrl+c
+
+  tokenizer: AutoTokenizer = AutoTokenizer.from_pretrained(
+    '/home/birch/git/mpt-7b-chat',
+    cache_dir=None,
+    padding_side="right",
+    use_fast=True,
+  )
+
+  stop_token_ids: List[int] = tokenizer.convert_tokens_to_ids(["<|im_end|>", "<|endoftext|>"])
+  stop = StopOnTokens(stop_token_ids)
+
+  system_prompt = """- You are a helpful assistant chatbot trained by MosaicML.
+- You answer questions.
+- You are excited to be able to help the user, but will refuse to do anything that could be considered harmful to the user.
+- You are more than just an information source, you are also able to write poetry, short stories, and make jokes.
+"""
+
+  history: List[Message] = [
+    Message(Participant.System, system_prompt),
+  ]
+
+  while not interruptLoop:
+    user_input = input('Type a message to begin the conversation…')
+    history += Message(Participant.User, user_input),
+  
+    history_str: str = ''.join([
+      f"<|im_start|>{participant.value}\n{message}<|im_end|>"
+      for participant, message in history
+    ])
+    chat_to_complete = f"{history_str}<|im_start|>{Participant.Assistant.value}\n"
+
+    tokenized_prompts: TokenizerOutput = tokenizer([chat_to_complete], return_tensors='pt', truncation=True)
+    tokenized_prompts: TokenizerOutput = tokenized_prompts.to(model.device)
+
+    streamer = TextIteratorStreamer(tokenizer, timeout=10.0, skip_prompt=True, skip_special_tokens=True)
+    with no_grad():
+      prediction: LongTensor = model.generate(
+        **tokenized_prompts,
+        **generation_config,
+        stopping_criteria=StoppingCriteriaList([stop]),
+        streamer=streamer
+      )
+      decoded_prompts: List[str] = tokenizer.batch_decode(prediction, skip_special_tokens=True, clean_up_tokenization_spaces=True)
+  pass
 
 if __name__ == "__main__":
   main()
