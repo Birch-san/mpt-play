@@ -10,15 +10,15 @@ from transformers import (
   set_seed,
   StoppingCriteria,
   StoppingCriteriaList,
-  TextIteratorStreamer,
 )
 import torch
 from torch import LongTensor, no_grad
 from src.device_map import device_map
+from src.async_text_iterator_streamer import AsyncTextIteratorStreamer
 import logging
-import signal
-from time import sleep
 from enum import Enum
+import asyncio
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,10 @@ class StopOnTokens(StoppingCriteria):
       if input_ids[0][-1] == stop_id:
         return True
     return False
+
+class StopUnconditionally(StoppingCriteria):
+  def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
+    return True
 
 @dataclass
 class ModelArguments:
@@ -69,6 +73,10 @@ class ModelArguments:
     default=False,
     metadata={"help": "Compute type of the model. If quantizing: this is also the compute type used for quantized computations. Prefer to turn this on if you are quantizing and your GPU supports it. You probably also want it even if you're not quantizing."}
   )
+  context_length: int = field(
+    default=2048,
+    metadata={"help": "How many bits to use."}
+  )
 
 @dataclass
 class MiscArguments:
@@ -79,6 +87,10 @@ class MiscArguments:
   compile: bool = field(
     default=False,
     metadata={"help": "Invoke torch.compile() on the model, with mode='max-autotune'. Requires PyTorch 2, CUDA, and either Python 3.10 or Python 3.11 with a recent torch nightly. Will make the first inference from the model take a bit longer, but subsequent inferences will be faster."}
+  )
+  use_system_prompt: bool = field(
+    default=False,
+    metadata={"help": "There is a system prompt used in MosaicML's MPT-7B-Chat demo, but in my brief testing it seemed that the model didn't listen to what I wrote in the system prompt… so I disable it by default, to save you some context length."}
   )
 
 @dataclass
@@ -118,6 +130,7 @@ def get_model(args: ModelArguments) -> AutoModelForCausalLM:
     args.model_name_or_path,
     trust_remote_code=args.trust_remote_code,
   )
+  config.update({"max_seq_len": args.context_length}) # was originally trained on 2048
   cuda_avail = torch.cuda.is_available()
   compute_dtype = torch.bfloat16 if args.bf16 else torch.float16
   load_in_4bit = args.bits == 4
@@ -153,7 +166,7 @@ def get_model(args: ModelArguments) -> AutoModelForCausalLM:
 
   return model
 
-def main():
+async def main():
   hfparser = HfArgumentParser((ModelArguments, GenerationArguments, MiscArguments))
   model_args, generation_args, misc_args, extra_args = hfparser.parse_args_into_dataclasses(return_remaining_strings=True)
   if extra_args:
@@ -163,12 +176,6 @@ def main():
   set_seed(misc_args.seed)
   if misc_args.compile:
     torch.compile(model, mode='max-autotune')
-  
-  interruptLoop = False
-  def interrupt_handler(sig, frame):
-    nonlocal interruptLoop
-    interruptLoop = True
-  signal.signal(signal.SIGINT, interrupt_handler) # handle ctrl+c
 
   tokenizer: AutoTokenizer = AutoTokenizer.from_pretrained(
     '/home/birch/git/mpt-7b-chat',
@@ -186,13 +193,17 @@ def main():
 - You are more than just an information source, you are also able to write poetry, short stories, and make jokes.
 """
 
-  history: List[Message] = [
-    Message(Participant.System, system_prompt),
-  ]
+  history: List[Message] = [Message(Participant.System, system_prompt)] if misc_args.use_system_prompt else []
 
-  while not interruptLoop:
-    user_input = input('Type a message to begin the conversation…')
-    history += Message(Participant.User, user_input),
+  first = True
+  while True:
+    try:
+      user_input = input('Type a message to begin the conversation…\n$ ' if first else '$ ')
+    except KeyboardInterrupt:
+      sys.exit(0)
+
+    first = False
+    history += [Message(Participant.User, user_input)]
   
     history_str: str = ''.join([
       f"<|im_start|>{participant.value}\n{message}<|im_end|>"
@@ -203,16 +214,42 @@ def main():
     tokenized_prompts: TokenizerOutput = tokenizer([chat_to_complete], return_tensors='pt', truncation=True)
     tokenized_prompts: TokenizerOutput = tokenized_prompts.to(model.device)
 
-    streamer = TextIteratorStreamer(tokenizer, timeout=10.0, skip_prompt=True, skip_special_tokens=True)
-    with no_grad():
+    streamer = AsyncTextIteratorStreamer(tokenizer, timeout=None, skip_prompt=True, skip_special_tokens=True)
+
+    stopping_criteria=StoppingCriteriaList([stop])
+
+    @no_grad()
+    async def generate() -> LongTensor:
       prediction: LongTensor = model.generate(
         **tokenized_prompts,
-        **generation_config,
-        stopping_criteria=StoppingCriteriaList([stop]),
-        streamer=streamer
+        generation_config=generation_config,
+        do_sample=generation_config.temperature > 0.,
+        stopping_criteria=stopping_criteria,
+        streamer=streamer,
       )
-      decoded_prompts: List[str] = tokenizer.batch_decode(prediction, skip_special_tokens=True, clean_up_tokenization_spaces=True)
-  pass
+      # if you wanted to see the result, you can do so like this:
+      #   decode: List[str] = tokenizer.batch_decode(prediction, skip_special_tokens=True, clean_up_tokenization_spaces=True)
+      # but we already printed it to the console via our async iterator
+      return prediction
+
+    loop = asyncio.get_event_loop()
+    task = loop.create_task(generate())
+    
+    response = ''
+    try:
+      # TODO: why doesn't generator yield anything until the entire sentence is finished?
+      async for decoded_token in streamer.gen():
+        response += decoded_token
+        print(decoded_token, end='', flush=True)
+    except KeyboardInterrupt:
+      stopping_criteria += [StopUnconditionally()]
+    print('')
+
+    # TODO: cull older history, otherwise context will just keep growing larger.
+    #       ideally by measuring each message to work out the smallest cull possible.
+    history += [Message(Participant.Assistant, response)]
+
+    await task
 
 if __name__ == "__main__":
-  main()
+  asyncio.run(main())
