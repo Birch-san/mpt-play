@@ -1,0 +1,8 @@
+torch
+# transformers haven't yet cut a release including the 4-bit quantization, so we'll install from source
+transformers @ git+https://github.com/huggingface/transformers.git@3416bba
+# accelerate haven't yet cut a release including the 4-bit quantization, so we'll install from source
+accelerate @ git+https://github.com/huggingface/accelerate.git@0226f75
+einops
+bitsandbytes>=0.39.0
+scipy
