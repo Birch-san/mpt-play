@@ -16,6 +16,20 @@
       ],
       "env": {
       }
+    },
+    {
+      "name": "Python: MPT play (Mac)",
+      "type": "python",
+      "request": "launch",
+      "module": "scripts.chat_play",
+      "justMyCode": false,
+      "args": [
+        "--trust_remote_code",
+      ],
+      "env": {
+        // if you are on a recently PyTorch nightly, you actually don't need this. it'll just be a no-op so there's no harm keeping it.
+        "PYTORCH_ENABLE_MPS_FALLBACK": "1"
+      }
     }
   ]
 }

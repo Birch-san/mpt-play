@@ -55,7 +55,9 @@ _Skip this step if you already have conda._
 Assuming you're using a `bash` shell:
 
 ```bash
+# Linux installs Anaconda via this shell script. Mac installs by running a .pkg installer.
 bash Anaconda-latest-Linux-x86_64.sh
+# this step probably works on both Linux and Mac.
 eval "$(~/anaconda3/bin/conda shell.bash hook)"
 conda config --set auto_activate_base false
 conda init
@@ -80,7 +82,10 @@ conda activate p311-mpt
 (Optional) treat yourself to latest nightly of PyTorch, with support for Python 3.11 and CUDA 12.1:
 
 ```bash
+# CUDA
 pip install --upgrade --pre torch --extra-index-url https://download.pytorch.org/whl/nightly/cu121
+# Mac
+pip install --upgrade --pre torch --extra-index-url https://download.pytorch.org/whl/nightly/cpu
 ```
 
 Install dependencies:
@@ -95,6 +100,12 @@ From root of repository:
 
 ```bash
 python -m scripts.chat_play --trust_remote_code --bf16
+```
+
+On Mac you'll need to disable bfloat16. `PYTORCH_ENABLE_MPS_FALLBACK=1` is not necessary in current PyTorch nightly, but there's no harm keeping it (and it may help on older PyTorch):
+
+```bash
+PYTORCH_ENABLE_MPS_FALLBACK=1 python -m scripts.chat_play --trust_remote_code
 ```
 
 ## License

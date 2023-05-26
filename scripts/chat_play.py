@@ -1,5 +1,9 @@
 from dataclasses import dataclass, field
 from typing import Optional, TypedDict, NamedTuple, List
+# we gotta stub torch.autocast before the MPT-7B model imports it
+from src.mps_autocast_stub import reassuring_symbol
+import torch
+from torch import LongTensor
 from transformers import (
   AutoConfig,
   AutoModelForCausalLM,
@@ -11,13 +15,14 @@ from transformers import (
   StoppingCriteria,
   StoppingCriteriaList,
 )
-import torch
-from torch import LongTensor
 from src.device_map import device_map
 from src.callback_text_iterator_streamer import CallbackTextIteratorStreamer
 import logging
 from enum import Enum
 import sys
+
+# no unused imports for me
+reassuring_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -142,17 +147,19 @@ def get_model(args: ModelArguments) -> AutoModelForCausalLM:
   ) if cuda_avail else None
 
   if not cuda_avail:
-    logger.warn("You don't have CUDA, so we have turned off quantization. If happen to be on a Mac: you probably have enough unified memory to run in fp16 anyway…")
+    logger.warning("You don't have CUDA, so we have turned off quantization. If you happen to be on a Mac: you probably have enough unified memory to run in fp16 anyway…")
 
   if compute_dtype == torch.float16 and cuda_avail and torch.cuda.is_bf16_supported():
     print("Your GPU supports bfloat16; you may want to try it with --bf16 (note: I'm not sure how important this is for inference, but it's certainly preferred when training with 4-bit quantization.)")
+  
+  device_map_ = { key: 'mps' for key in device_map } if torch.backends.mps.is_available() else device_map
 
   model = AutoModelForCausalLM.from_pretrained(
     args.model_name_or_path,
     config=config,
     load_in_4bit=load_in_4bit,
     load_in_8bit=load_in_8bit,
-    device_map=device_map,
+    device_map=device_map_,
     quantization_config=quantization_config,
     torch_dtype=compute_dtype,
     trust_remote_code=args.trust_remote_code,
