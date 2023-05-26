@@ -195,12 +195,19 @@ async def main():
 
   history: List[Message] = [Message(Participant.System, system_prompt)] if misc_args.use_system_prompt else []
 
+  reset_ansi='\x1b[0m'
+  blue_ansi='\x1b[31;34m'
+  green_ansi='\x1b[31;32m'
+  purple_ansi='\x1b[31;35m'
+  prompt=f'{purple_ansi}$ '
+
   first = True
   while True:
     try:
-      user_input = input('Type a message to begin the conversation…\n$ ' if first else '$ ')
+      user_input = input(f'{blue_ansi}Type a message to begin the conversation…{reset_ansi}\n{prompt}' if first else prompt)
     except KeyboardInterrupt:
       sys.exit(0)
+    print(reset_ansi, end='')
 
     first = False
     history += [Message(Participant.User, user_input)]
@@ -236,6 +243,9 @@ async def main():
     task = loop.create_task(generate())
     
     response = ''
+
+    print(green_ansi, end='', flush=True)
+
     try:
       # TODO: why doesn't generator yield anything until the entire sentence is finished?
       async for decoded_token in streamer.gen():
@@ -243,7 +253,9 @@ async def main():
         print(decoded_token, end='', flush=True)
     except KeyboardInterrupt:
       stopping_criteria += [StopUnconditionally()]
-    print('')
+
+    # reset ANSI control sequence (plus line break)
+    print(reset_ansi)
 
     # TODO: cull older history, otherwise context will just keep growing larger.
     #       ideally by measuring each message to work out the smallest cull possible.
