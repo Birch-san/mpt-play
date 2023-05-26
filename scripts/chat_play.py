@@ -178,7 +178,7 @@ async def main():
     torch.compile(model, mode='max-autotune')
 
   tokenizer: AutoTokenizer = AutoTokenizer.from_pretrained(
-    '/home/birch/git/mpt-7b-chat',
+    model_args.model_name_or_path,
     cache_dir=None,
     padding_side="right",
     use_fast=True,
