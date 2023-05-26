@@ -1,5 +1,7 @@
 # MPT-Play
 
+![image](https://github.com/Birch-san/mpt-play/assets/6141784/da9cbf86-bc1c-499d-9d9e-7eff3a210696)
+
 Python script to demonstrate how to invoke models such as MPT-7B-Chat from the command-line.
 
 ## Setup
