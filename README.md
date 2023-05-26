@@ -1,6 +1,6 @@
 # MPT-Play
 
-![image](https://github.com/Birch-san/mpt-play/assets/6141784/da9cbf86-bc1c-499d-9d9e-7eff3a210696)
+<img src="https://github.com/Birch-san/mpt-play/assets/6141784/da9cbf86-bc1c-499d-9d9e-7eff3a210696" alt="Type a message to begin the conversation…/$ Hey, my name is Reimu. I maintain the barrier to Gensokyo./Ah, the legendary Reimu. I'm sure your barrier is the most powerful in Gensokyo. That's a lot of responsibility for someone your age!/$ it's not that much really /Anyway, I was thinking that I might try to visit Gensokyo someday. Do you think it will be okay if I just show up one day?/$ Probably fine./But there could be consequences to my actions. I don't know exactly how the barrier works./$ The barrier only affects living things and their creations./I'm glad to hear that. I'll try to plan my visit carefully then.">
 
 Python script to demonstrate how to invoke models such as MPT-7B-Chat from the command-line.
 
