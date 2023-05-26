@@ -12,12 +12,11 @@ from transformers import (
   StoppingCriteriaList,
 )
 import torch
-from torch import LongTensor, no_grad
+from torch import LongTensor
 from src.device_map import device_map
-from src.async_text_iterator_streamer import AsyncTextIteratorStreamer
+from src.callback_text_iterator_streamer import CallbackTextIteratorStreamer
 import logging
 from enum import Enum
-import asyncio
 import sys
 
 logger = logging.getLogger(__name__)
@@ -43,10 +42,6 @@ class StopOnTokens(StoppingCriteria):
       if input_ids[0][-1] == stop_id:
         return True
     return False
-
-class StopUnconditionally(StoppingCriteria):
-  def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
-    return True
 
 @dataclass
 class ModelArguments:
@@ -166,7 +161,7 @@ def get_model(args: ModelArguments) -> AutoModelForCausalLM:
 
   return model
 
-async def main():
+def main():
   hfparser = HfArgumentParser((ModelArguments, GenerationArguments, MiscArguments))
   model_args, generation_args, misc_args, extra_args = hfparser.parse_args_into_dataclasses(return_remaining_strings=True)
   if extra_args:
@@ -186,6 +181,7 @@ async def main():
 
   stop_token_ids: List[int] = tokenizer.convert_tokens_to_ids(["<|im_end|>", "<|endoftext|>"])
   stop = StopOnTokens(stop_token_ids)
+  stopping_criteria=StoppingCriteriaList([stop])
 
   system_prompt = """- You are a helpful assistant chatbot trained by MosaicML.
 - You answer questions.
@@ -220,13 +216,18 @@ async def main():
 
     tokenized_prompts: TokenizerOutput = tokenizer([chat_to_complete], return_tensors='pt', truncation=True)
     tokenized_prompts: TokenizerOutput = tokenized_prompts.to(model.device)
+    
+    print(green_ansi, end='', flush=True)
 
-    streamer = AsyncTextIteratorStreamer(tokenizer, timeout=None, skip_prompt=True, skip_special_tokens=True)
+    response = ''
+    def on_text(message: str, stream_end = False):
+      nonlocal response
+      response += message
+      print(message, end='', flush=True)
 
-    stopping_criteria=StoppingCriteriaList([stop])
+    streamer = CallbackTextIteratorStreamer(tokenizer, callback=on_text, skip_prompt=True, skip_special_tokens=True)
 
-    @no_grad()
-    async def generate() -> LongTensor:
+    try:
       prediction: LongTensor = model.generate(
         **tokenized_prompts,
         generation_config=generation_config,
@@ -236,23 +237,9 @@ async def main():
       )
       # if you wanted to see the result, you can do so like this:
       #   decode: List[str] = tokenizer.batch_decode(prediction, skip_special_tokens=True, clean_up_tokenization_spaces=True)
-      # but we already printed it to the console via our async iterator
-      return prediction
-
-    loop = asyncio.get_event_loop()
-    task = loop.create_task(generate())
-    
-    response = ''
-
-    print(green_ansi, end='', flush=True)
-
-    try:
-      # TODO: why doesn't generator yield anything until the entire sentence is finished?
-      async for decoded_token in streamer.gen():
-        response += decoded_token
-        print(decoded_token, end='', flush=True)
+      # but we're already streaming it to the console via our callback
     except KeyboardInterrupt:
-      stopping_criteria += [StopUnconditionally()]
+      pass
 
     # reset ANSI control sequence (plus line break)
     print(reset_ansi)
@@ -261,7 +248,5 @@ async def main():
     #       ideally by measuring each message to work out the smallest cull possible.
     history += [Message(Participant.Assistant, response)]
 
-    await task
-
 if __name__ == "__main__":
-  asyncio.run(main())
+  main()
