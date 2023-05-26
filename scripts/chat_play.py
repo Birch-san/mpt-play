@@ -133,8 +133,8 @@ def get_model(args: ModelArguments) -> AutoModelForCausalLM:
   config.update({"max_seq_len": args.context_length}) # was originally trained on 2048
   cuda_avail = torch.cuda.is_available()
   compute_dtype = torch.bfloat16 if args.bf16 else torch.float16
-  load_in_4bit = args.bits == 4
-  load_in_8bit = args.bits == 8
+  load_in_4bit = args.bits == 4 and cuda_avail
+  load_in_8bit = args.bits == 8 and cuda_avail
 
   quantization_config = BitsAndBytesConfig(
     load_in_4bit=load_in_4bit,
