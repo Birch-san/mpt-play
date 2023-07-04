@@ -209,7 +209,7 @@ def main():
   while True:
     try:
       user_input = input(f'{blue_ansi}Type a message to begin the conversation…{reset_ansi}\n{prompt}' if first else prompt)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, EOFError):
       sys.exit(0)
     print(reset_ansi, end='')
 
